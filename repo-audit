@@ -1,0 +1,142 @@
+#!/usr/bin/env python
+
+__author__ = "Miles Barry"
+__copyright__ = "Copyright 2017"
+__credits__ = ["Miles Barry",]
+__license__ = "GPL"
+__version__ = "0.0.4"
+__maintainer__ = "Miles Barry"
+__email__ = ""
+__status__ = "Development"
+
+import os,sys,re,time
+import ConfigParser
+import argparse
+import json
+from glob import glob
+from pprint import pprint
+from tqdm import *
+
+def get_ip_from_string(repo_filename):
+    """Extract IP address from full file path"""
+    return (re.findall(r'(?:[\d]{1,3})\.(?:[\d]{1,3})\.(?:[\d]{1,3})\.(?:[\d]{1,3})',repo_filename)[0])
+
+def get_repo_sections(repo_filename):
+    """Get all sections within repo"""
+    repo = ConfigParser.RawConfigParser()
+    repo.read(repo_filename)
+    for name in repo.sections():
+        if name == 'main':
+            continue
+        try:
+            if repo.get(name, 'enabled') == '0':
+                continue
+        except:
+            pass
+        available = repo.options(name)
+        if 'baseurl' in available:
+            add_repo_to_repos(name, 'baseurl:'+repo.get(name, 'baseurl'), repo_filename)
+        elif 'mirrorlist' in available:
+            add_repo_to_repos(name, 'mirrorlist:'+repo.get(name,'mirrorlist'), repo_filename)
+        elif 'metalink' in available:
+            add_repo_to_repos(name, 'metalink:'+repo.get(name,'metalink'), repo_filename)
+        else:
+            print name+' exists in '+repo_filename+' but has no baseurl,mirrorlist or metalink defined'
+
+def add_repo_to_repos(name, url, repo_filename):
+    """Add repo to the repos"""
+    if name not in repos:
+        if args.noip is False:
+            repos[name] = {}
+        else:
+            repos[name] = []
+    if args.list is True:
+        return
+    if args.noip is False:
+        ip = get_ip_from_string(repo_filename)
+        if url not in repos[name]:
+            repos[name][url] = [[ip,os.path.basename(repo_filename)]]
+        else:
+            repos[name][url].append([ip,os.path.basename(repo_filename)])
+    else:
+        if url not in repos[name]:
+            repos[name].append(url)
+
+def find_all_repos(repo_directory):
+    """Find all .repo files from a base directory"""
+    if os.path.isdir(repo_directory) == False:
+        print >> sys.stderr, "directory "+repo_directory+" does not exist"
+        sys.exit(1)
+    repo_paths=([y for x in os.walk(repo_directory) for y in sum([glob(os.path.join(x[0], _filter)) for _filter in ['*.repo', 'yum.conf']], [])])
+    if len(repo_paths) == 0:
+        print >> sys.stderr, "found 0 repo files in "+repo_directory
+        sys.exit(1)
+    return (repo_paths)
+
+def setup_parser():
+    """Prepare the parser and it's configuration"""
+    parser = argparse.ArgumentParser(description="Audit a collection of YUM repo files")
+    parser.add_argument("source_dir", help="root directory of repos")
+    parser.add_argument("--repo", help="only output info on specified repo (default = all)", default="all")
+    parser.add_argument("--list", help="list all repos found", action="store_true")
+    parser.add_argument("--stats", help="show statistical information", action="store_true")
+    parser.add_argument("--noip", help="do not output associated IP addresses", action="store_true")
+    parser.add_argument("--file", help="write output to file")
+    return (parser)
+
+def validate_args(args):
+    """Check all command line arguments are valid"""
+    if args.file is not None:
+        try:
+            args.file = open(args.file, 'w')
+        except IOError,e:
+            print >> sys.stderr, "Unable to write to file "+args.file
+            sys.exit(1)
+
+def list_repos(repos):
+    """Print all repo names to stdout or file"""
+    if args.file is None:
+        for tag,data in sorted(repos.items()):
+            print tag
+    else:
+        for tag,data in sorted(repos.items()):
+            args.file.write(tag+"\n")
+
+def output_repo(repo,name=None):
+    """Print all or chosen repo to stdout or file"""
+    if name is not None:
+        try:
+            if args.file is not None:
+                json.dump (repo[name], args.file, sort_keys=True, indent=4, separators=(',', ': '))
+            else:
+                json.dump (repo[name], sys.stdout, sort_keys=True, indent=4, separators=(',', ': '))
+                print
+        except:
+            print >> sys.stderr, name+" repo was not found in any of the parsed files"
+            sys.exit(0)
+    else:
+        if args.file is not None:
+            json.dump (repo, args.file, sort_keys=True, indent=4, separators=(',', ': '))
+        else:
+            json.dump (repo, sys.stdout, sort_keys=True, indent=4, separators=(',', ': '))
+            print
+
+if __name__ == "__main__":
+    parser = setup_parser()
+    args = parser.parse_args()
+    validate_args(args)
+    repo_files = find_all_repos(args.source_dir)
+    repos={}
+    index=0
+    total=len(repo_files)
+    for i in tqdm(range(total)):
+        get_repo_sections(repo_files[index])
+        index +=1 
+    if (args.repo == "all") and (args.list is False):
+        output_repo(repos)
+    elif (args.repo != "all") and (args.list is False):
+        output_repo(repos, args.repo)
+    if args.list is True:
+        list_repos(repos)
+    if args.file is not None:
+        args.file.close()
